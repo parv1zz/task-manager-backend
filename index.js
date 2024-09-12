@@ -15,7 +15,7 @@ const fs = require('fs')
 const schedule = require('node-schedule')
 
 // notifications funcs
-const sendNotification = (body) => {
+const sendMessage = (body) => {
   // obj
   let message = {
     token: body.token,
@@ -41,44 +41,69 @@ const sendNotification = (body) => {
       if(body.ids) {
         account_notifications = account_notifications.filter(v => v.ids.taskId != body.ids.taskId || v.ids.reminderId != body.ids.reminderId)
         saveNotificationsToDB()
+        schedules = schedules.filter(v => v.notification.ids.taskId != body.ids.taskId || v.notification.ids.reminderId != body.ids.reminderId)
       }
     })
     .catch((error) => {
       console.log('Error sending message:', error)
     })
 }
+const sendNotification = (body) => {
+  let date = new Date(body.time)
 
-const deleteNotification = () => {}
+  if(date.getTime() <= Date.now()+1000) {
+    console.log('instant notification')
+
+    sendMessage(body)
+  } else {
+    console.log('timed notification')
+
+    const job = schedule.scheduleJob(date, function() {
+      sendMessage(body)
+    })
+    if(body.ids) {
+      schedules.push({
+        job: job,
+        notification: body
+      })
+    }
+  }
+}
+const deleteNotification = (taskId, reminderId) => {
+  // cancel job
+  const schedule = schedules.find(v => v.notification.ids.taskId == taskId && v.notification.ids.reminderId == reminderId)
+  schedule.job.cancel()
+  // delete from db
+  account_notifications = account_notifications.filter(v => v.ids.taskId != taskId || v.ids.reminderId != reminderId)
+  saveNotificationsToDB()
+  // delete from jobs
+  schedules = schedules.filter(v => v.notification.ids.taskId != taskId || v.notification.ids.reminderId != reminderId)
+
+  console.log('notification canceled')
+}
 const editNotification = () => {}
+const replaceNotifications = () => {}
 
+//** app starts here
 //* account
 const accountId = 1
 let account_notifications
 
-// get from db and send
+let schedules = []
+
+// get from db
 let all_accounts_notifications = []
 const data = fs.readFileSync('./accounts_notifications.json', 'utf8', (err) => {})
+// send
 if(data) {
   all_accounts_notifications = JSON.parse(data)
   account_notifications = all_accounts_notifications.find(v => v.accountId = accountId).notifications
 
   if(account_notifications.length > 0) {
-    console.log('There are notifications to send')
+    console.log('sending from db')
 
     for(const notification of account_notifications) {
-      let date = new Date(notification.time)
-
-      if(date.getTime() <= Date.now()+1000) {
-        console.log('instant notification')
-
-        sendNotification(notification)
-      } else {
-        console.log('timed notification')
-
-        const job = schedule.scheduleJob(date, function() {
-          sendNotification(notification)
-        })
-      }
+      sendNotification(notification)
     }
   }
 }
@@ -107,30 +132,21 @@ app.get('/', (req, res) => {
 app.post('/send-notification', (req, res) => {
   console.log('/send-notification requested...')
   
+  // save notifications to db
   if(req.body.ids) {
     account_notifications.push(req.body)
     saveNotificationsToDB()
   }
 
-  let date = new Date(req.body.time)
-
-  if(date.getTime() <= Date.now()+1000) {
-    console.log('instant notification')
-
-    sendNotification(req.body)
-  } else {
-    console.log('timed notification')
-
-    const job = schedule.scheduleJob(date, function() {
-      sendNotification(req.body)
-    })
-  }
+  sendNotification(req.body)
 
   res.json({ 'status': 'Success', 'message': 'Message sent to push service' })
 })
 
 app.post('/cancel-notification', (req, res) => {
-  // clearTimeout(notifications[token].find(v => v.taskId == req.body.taskId && v.reminderId == req.body.reminderId).timeoutId)
+  deleteNotification(req.body.taskId, req.body.remidnerId)
+
+  res.json({ 'status': 'Success', 'message': 'Notification deleted' })
 })
 
 // listen
@@ -140,6 +156,7 @@ app.listen(port, () => {
 
 // // save notifications with authed account id (not with token)
 // // todo 1. send notifications even after restarting server
-// todo 2. delete notifications
+// // todo 2. delete notifications
 // todo 3. edit notifications 1) on task edit 2) on reminders edit
-// todo: connect accoun id to notifications (after implementing id auth)
+// todo: connect account id to notifications (after implementing id auth)
+// todo: json -> db, schedule -> cron
