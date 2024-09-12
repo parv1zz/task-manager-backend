@@ -9,32 +9,85 @@ admin.initializeApp({
 
 const messaging = admin.messaging()
 
-// schedule and notifications
-// const fs = require('fs')
-
-// let notifications = []
-
-// fs.readFile('./notifications.json', 'utf8', function (err, data) {
-//   notifications = data ? JSON.parse(data) : []
-//   console.log(notifications)
-// })
-
-// const writeToFile = async (path, data) => {
-//   let filehandle = null
-
-//   try {
-//     filehandle = await fs.promises.open(path, mode = 'w')
-//     // Write to file
-//     await filehandle.writeFile(data)
-//   } finally {
-//     if (filehandle) {
-//       // Close the file if it is opened.
-//       await filehandle.close()
-//     }
-//   }
-// }
-
+// fs
+const fs = require('fs')
+// schedule
 const schedule = require('node-schedule')
+
+// notifications funcs
+const sendNotification = (body) => {
+  // obj
+  let message = {
+    token: body.token,
+    notification: body.notification,
+    webpush: {
+      fcmOptions: {
+        link: 'http://localhost:3000'
+      }
+    },
+  }
+  if(body.ids) {
+    message.data = {
+      taskId: String(body.ids.taskId),
+      reminderId: String(body.ids.reminderId),
+    }
+  }
+
+  // send
+  messaging.send(message)
+    .then((response) => {
+      console.log('Successfully sent message:', response)
+
+      if(body.ids) {
+        account_notifications = account_notifications.filter(v => v.ids.taskId != body.ids.taskId || v.ids.reminderId != body.ids.reminderId)
+        saveNotificationsToDB()
+      }
+    })
+    .catch((error) => {
+      console.log('Error sending message:', error)
+    })
+}
+
+const deleteNotification = () => {}
+const editNotification = () => {}
+
+//* account
+const accountId = 1
+let account_notifications
+
+// get from db and send
+let all_accounts_notifications = []
+const data = fs.readFileSync('./accounts_notifications.json', 'utf8', (err) => {})
+if(data) {
+  all_accounts_notifications = JSON.parse(data)
+  account_notifications = all_accounts_notifications.find(v => v.accountId = accountId).notifications
+
+  if(account_notifications.length > 0) {
+    console.log('There are notifications to send')
+
+    for(const notification of account_notifications) {
+      let date = new Date(notification.time)
+
+      if(date.getTime() <= Date.now()+1000) {
+        console.log('instant notification')
+
+        sendNotification(notification)
+      } else {
+        console.log('timed notification')
+
+        const job = schedule.scheduleJob(date, function() {
+          sendNotification(notification)
+        })
+      }
+    }
+  }
+}
+
+// save to db
+async function saveNotificationsToDB() {
+  all_accounts_notifications.find(v => v.accountId = accountId).notifications = account_notifications
+  await fs.promises.writeFile('./accounts_notifications.json', JSON.stringify(all_accounts_notifications), (err) => {})
+}
 
 // server
 const express = require('express')
@@ -47,49 +100,46 @@ app.use(cors())
 app.use(express.json())
 
 app.get('/', (req, res) => {
-  res.send('Hellooo its meeeee')
+  res.send('Hello')
 })
 
-
-// send notification
+// posts
 app.post('/send-notification', (req, res) => {
-  console.log('send-notification requested...')
+  console.log('/send-notification requested...')
   
-  let date = new Date(new Date(req.body.time).getTime() + 100)
+  if(req.body.ids) {
+    account_notifications.push(req.body)
+    saveNotificationsToDB()
+  }
 
-  const job = schedule.scheduleJob(date, function(){
-    let message = {
-      notification: {
-        title: req.body.notification.title,
-        body: req.body.notification.body,
-      },
-      token: req.body.token,
-      webpush: {
-        fcmOptions: {
-          link: 'http://localhost:3000'
-        }
-      },
-    }
-    if(req.body.ids) {
-      message.data = {
-        taskId: String(req.body.ids.taskId),
-        reminderId: String(req.body.ids.reminderId),
-      }
-    }
+  let date = new Date(req.body.time)
 
-    messaging.send(message)
-      .then((response) => {
-        console.log('Successfully sent message:', response)
-      })
-      .catch((error) => {
-        console.log('Error sending message:', error)
-      })
-  })
+  if(date.getTime() <= Date.now()+1000) {
+    console.log('instant notification')
+
+    sendNotification(req.body)
+  } else {
+    console.log('timed notification')
+
+    const job = schedule.scheduleJob(date, function() {
+      sendNotification(req.body)
+    })
+  }
 
   res.json({ 'status': 'Success', 'message': 'Message sent to push service' })
 })
 
+app.post('/cancel-notification', (req, res) => {
+  // clearTimeout(notifications[token].find(v => v.taskId == req.body.taskId && v.reminderId == req.body.reminderId).timeoutId)
+})
+
 // listen
 app.listen(port, () => {
-  console.log('Server is running on port ', port)
+  ('Server is running on port ', port)
 })
+
+// // save notifications with authed account id (not with token)
+// // todo 1. send notifications even after restarting server
+// todo 2. delete notifications
+// todo 3. edit notifications 1) on task edit 2) on reminders edit
+// todo: connect accoun id to notifications (after implementing id auth)
